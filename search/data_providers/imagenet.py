@@ -18,6 +18,9 @@ class ImagenetDataProvider(DataProvider):
         train_transforms = self.build_train_transform(distort_color, resize_scale)
         train_dataset = datasets.ImageFolder(self.train_path, train_transforms)
 
+        self.local_rank = int(os.environ['LOCAL_RANK'])
+        self.world_size = int(os.environ['WORLD_SIZE'])
+
         if valid_size is not None:
             if isinstance(valid_size, float):
                 valid_size = int(valid_size * len(train_dataset))
@@ -36,19 +39,29 @@ class ImagenetDataProvider(DataProvider):
                 self.normalize,
             ]))
 
-            self.train = torch.utils.data.DataLoader(
-                train_dataset, batch_size=train_batch_size, sampler=train_sampler,
-                num_workers=n_worker, pin_memory=True,
-            )
+            # self.train = torch.utils.data.DataLoader(
+            #     train_dataset, batch_size=train_batch_size, sampler=train_sampler,
+            #     num_workers=n_worker, pin_memory=True,
+            # )
+            from .dali import HybridTrainPipe
+            from nvidia.dali.plugin.pytorch import DALIClassificationIterator
+            pipe = HybridTrainPipe(batch_size=train_batch_size, num_threads=n_worker, device_id=self.local_rank, data_dir=self.train_path, crop=self.image_size)
+            pipe.build()
+            self.train = DALIClassificationIterator(pipe, size=int(pipe.epoch_size("Reader") / self.world_size))
             self.valid = torch.utils.data.DataLoader(
                 valid_dataset, batch_size=test_batch_size, sampler=valid_sampler,
                 num_workers=n_worker, pin_memory=True,
             )
         else:
-            self.train = torch.utils.data.DataLoader(
-                train_dataset, batch_size=train_batch_size, shuffle=True,
-                num_workers=n_worker, pin_memory=True,
-            )
+            # self.train = torch.utils.data.DataLoader(
+            #     train_dataset, batch_size=train_batch_size, shuffle=True,
+            #     num_workers=n_worker, pin_memory=True,
+            # )
+            from .dali import HybridTrainPipe
+            from nvidia.dali.plugin.pytorch import DALIClassificationIterator
+            pipe = HybridTrainPipe(batch_size=train_batch_size, num_threads=n_worker, device_id=self.local_rank, data_dir=self.train_path, crop=self.image_size)
+            pipe.build()
+            self.train = DALIClassificationIterator(pipe, size=int(pipe.epoch_size("Reader") / self.world_size))
             self.valid = None
 
         self.test = torch.utils.data.DataLoader(
@@ -78,7 +91,7 @@ class ImagenetDataProvider(DataProvider):
     @property
     def save_path(self):
         if self._save_path is None:
-            self._save_path = '/dataset/imagenet'
+            self._save_path = '/mnt/tscpfs2/yuntao.chen/dataset/imagenet'
         return self._save_path
 
     @property

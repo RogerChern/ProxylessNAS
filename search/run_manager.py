@@ -179,11 +179,16 @@ class RunManager:
         self.net_on_cpu_for_latency = copy.deepcopy(self.net).cpu()
         self.latency_estimator = LatencyEstimator()
 
+        # dpp
+        self.world_size = int(os.environ['WORLD_SIZE'])
+        self.local_rank = int(os.environ['LOCAL_RANK'])
+
         # move network to GPU if available
         if torch.cuda.is_available():
-            self.device = torch.device('cuda:0')
-            self.net = torch.nn.DataParallel(self.net)
-            self.net.to(self.device)
+            self.device = torch.device('cuda:%d' % self.local_rank)
+            self.net.to(self.local_rank)
+            from torch.nn.parallel import DistributedDataParallel as DDP
+            self.net = DDP(self.net, device_ids=[self.local_rank])
             cudnn.benchmark = True
         else:
             raise ValueError
@@ -226,7 +231,7 @@ class RunManager:
     def net_flops(self):
         data_shape = [1] + list(self.run_config.data_provider.data_shape)
 
-        if isinstance(self.net, nn.DataParallel):
+        if isinstance(self.net, nn.parallel.DistributedDataParallel):
             net = self.net.module
         else:
             net = self.net
@@ -336,7 +341,7 @@ class RunManager:
             print(self.net)
 
         # parameters
-        if isinstance(self.net, nn.DataParallel):
+        if isinstance(self.net, nn.parallel.DistributedDataParallel):
             total_params = count_parameters(self.net.module)
         else:
             total_params = count_parameters(self.net)
@@ -520,7 +525,9 @@ class RunManager:
         self.net.train()
 
         end = time.time()
-        for i, (images, labels) in enumerate(self.run_config.train_loader):
+        for i, data in enumerate(self.run_config.train_loader):
+            images = data[0]["data"]
+            labels = data[0]["label"].squeeze().cuda().long()
             data_time.update(time.time() - end)
             new_lr = adjust_lr_func(i)
             images, labels = images.to(self.device), labels.to(self.device)
@@ -547,13 +554,14 @@ class RunManager:
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if i % self.run_config.print_frequency == 0 or i + 1 == len(self.run_config.train_loader):
+            if self.local_rank == 0 and i % self.run_config.print_frequency == 0 or i + 1 == self.run_config.train_loader._size // self.run_config.train_batch_size:
                 batch_log = train_log_func(i, batch_time, data_time, losses, top1, top5, new_lr)
                 self.write_log(batch_log, 'train')
         return top1, top5
 
     def train(self, print_top5=False):
-        nBatch = len(self.run_config.train_loader)
+        # nBatch = len(self.run_config.train_loader)
+        nBatch = self.run_config.train_loader._size // self.run_config.train_batch_size
 
         def train_log_func(epoch_, i, batch_time, data_time, losses, top1, top5, lr):
             batch_log = 'Train [{0}][{1}/{2}]\t' \
@@ -569,7 +577,8 @@ class RunManager:
             return batch_log
 
         for epoch in range(self.start_epoch, self.run_config.n_epochs):
-            print('\n', '-' * 30, 'Train epoch: %d' % (epoch + 1), '-' * 30, '\n')
+            if self.local_rank == 0:
+                print('\n', '-' * 30, 'Train epoch: %d' % (epoch + 1), '-' * 30, '\n')
 
             end = time.time()
             train_top1, train_top5 = self.train_one_epoch(
@@ -579,11 +588,13 @@ class RunManager:
             )
             time_per_epoch = time.time() - end
             seconds_left = int((self.run_config.n_epochs - epoch - 1) * time_per_epoch)
-            print('Time per epoch: %s, Est. complete in: %s' % (
-                str(timedelta(seconds=time_per_epoch)),
-                str(timedelta(seconds=seconds_left))))
 
-            if (epoch + 1) % self.run_config.validation_frequency == 0:
+            if self.local_rank == 0:
+                print('Time per epoch: %s, Est. complete in: %s' % (
+                    str(timedelta(seconds=time_per_epoch)),
+                    str(timedelta(seconds=seconds_left))))
+
+            if (epoch + 1) % self.run_config.validation_frequency == 0 and self.local_rank == 0:
                 val_loss, val_acc, val_acc5 = self.validate(is_test=False, return_top5=True)
                 is_best = val_acc > self.best_acc
                 self.best_acc = max(self.best_acc, val_acc)
@@ -598,9 +609,12 @@ class RunManager:
             else:
                 is_best = False
 
-            self.save_model({
-                'epoch': epoch,
-                'best_acc': self.best_acc,
-                'optimizer': self.optimizer.state_dict(),
-                'state_dict': self.net.module.state_dict(),
-            }, is_best=is_best)
+            if self.local_rank == 0:
+                self.save_model({
+                    'epoch': epoch,
+                    'best_acc': self.best_acc,
+                    'optimizer': self.optimizer.state_dict(),
+                    'state_dict': self.net.module.state_dict(),
+                }, is_best=is_best)
+            
+            self.run_config.train_loader.reset()

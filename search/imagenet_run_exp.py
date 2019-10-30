@@ -8,6 +8,7 @@ import os
 import json
 
 import torch
+import torch.distributed as dist
 
 from models import *
 from run_manager import RunManager
@@ -15,7 +16,7 @@ from run_manager import RunManager
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--path', type=str, default=None)
-parser.add_argument('--gpu', help='gpu available', default='0,1,2,3')
+parser.add_argument('--gpu', help='gpu available', default='0,1,2,3,4,5,6,7')
 parser.add_argument('--train', action='store_true')
 
 parser.add_argument('--manual_seed', default=0, type=int)
@@ -69,6 +70,10 @@ if __name__ == '__main__':
 
     os.makedirs(args.path, exist_ok=True)
 
+    local_rank = int(os.environ['LOCAL_RANK'])
+    world_size = int(os.environ['WORLD_SIZE'])
+    dist.init_process_group("nccl", rank=local_rank, world_size=world_size)
+
     # prepare run config
     run_config_path = '%s/run.config' % args.path
     if os.path.isfile(run_config_path):
@@ -114,7 +119,8 @@ if __name__ == '__main__':
 
     # build run manager
     run_manager = RunManager(args.path, net, run_config, measure_latency=args.latency)
-    run_manager.save_config(print_info=True)
+    if local_rank == 0:
+        run_manager.save_config(print_info=True)
 
     # load checkpoints
     init_path = '%s/init' % args.path
@@ -149,7 +155,7 @@ if __name__ == '__main__':
 
     output_dict = {}
     # validate
-    if run_config.valid_size:
+    if run_config.valid_size and local_rank == 0:
         print('Test on validation set')
         loss, acc1, acc5 = run_manager.validate(is_test=False, return_top5=True)
         log = 'valid_loss: %f\t valid_acc1: %f\t valid_acc5: %f' % (loss, acc1, acc5)
@@ -161,12 +167,13 @@ if __name__ == '__main__':
         }
 
     # test
-    print('Test on test set')
-    loss, acc1, acc5 = run_manager.validate(is_test=True, return_top5=True)
-    log = 'test_loss: %f\t test_acc1: %f\t test_acc5: %f' % (loss, acc1, acc5)
-    run_manager.write_log(log, prefix='test')
-    output_dict = {
-        **output_dict,
-        'test_loss': '%f' % loss, 'test_acc1': '%f' % acc1, 'test_acc5': '%f' % acc5
-    }
-    json.dump(output_dict, open('%s/output' % args.path, 'w'), indent=4)
+    if local_rank == 0:
+        print('Test on test set')
+        loss, acc1, acc5 = run_manager.validate(is_test=True, return_top5=True)
+        log = 'test_loss: %f\t test_acc1: %f\t test_acc5: %f' % (loss, acc1, acc5)
+        run_manager.write_log(log, prefix='test')
+        output_dict = {
+            **output_dict,
+            'test_loss': '%f' % loss, 'test_acc1': '%f' % acc1, 'test_acc5': '%f' % acc5
+        }
+        json.dump(output_dict, open('%s/output' % args.path, 'w'), indent=4)
