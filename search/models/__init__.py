@@ -31,7 +31,9 @@ class ImagenetRunConfig(RunConfig):
         self.resize_scale = resize_scale
         self.distort_color = distort_color
 
-        print(kwargs.keys())
+        import os
+        if int(os.environ.get('LOCAL_RANK', 0)) == 0:
+            print(kwargs.keys())
 
     @property
     def data_config(self):
