@@ -195,7 +195,8 @@ class RunManager:
             # self.device = torch.device('cpu')
 
         # net info
-        self.print_net_info(measure_latency)
+        if self.local_rank == 0:
+            self.print_net_info(measure_latency)
 
         self.criterion = nn.CrossEntropyLoss()
         if self.run_config.no_decay_keys:

@@ -94,9 +94,10 @@ if __name__ == '__main__':
         run_config = ImagenetRunConfig(
             **args.__dict__
         )
-    print('Run config:')
-    for k, v in run_config.config.items():
-        print('\t%s: %s' % (k, v))
+    if local_rank == 0:
+        print('Run config:')
+        for k, v in run_config.config.items():
+            print('\t%s: %s' % (k, v))
 
     # prepare network
     net_config_path = '%s/net.config' % args.path
