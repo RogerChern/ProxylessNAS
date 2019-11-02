@@ -4,10 +4,16 @@
  International Conference on Learning Representations (ICLR), 2019.
  -->
 ## Requirements
-- Pytorch 1.0
-- Python 3.6+
+- Pytorch 1.3
+- DALI 0.8
+- pyyaml
 
 ```bash
+# Train a model with DDP
+python3 -u -m torch.distributed.launch --use_env --np
+roc_per_node 8 imagenet_run_exp.py --path Exp/proxyless_mobile_14_dev --train --net proxyless_mobile_14 --dropout 0.3 --init_lr 0.3 --train_batch_size 96 --
+n_worker 5
+
 # Train a model: <path>/run.config; <path>/net.config
 python python imagenet_run_exp.py --path <path> --train
 
